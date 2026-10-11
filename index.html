@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TIVA Chat</title>
+<meta name="theme-color" content="#075e54">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TIVA">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icono-192.png">
+<style>
+  html,body{margin:0;height:100%;background:#075e54;font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+  body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+  #aviso{display:none;align-items:center;gap:10px;background:#fff8dc;color:#3d2c00;padding:10px 12px;border-bottom:3px solid #f2c230;font-size:15px;font-weight:700;line-height:1.3}
+  #aviso .tx{flex:1}
+  #aviso button{border:0;border-radius:999px;font-family:inherit;font-weight:900;font-size:15px;cursor:pointer}
+  #aviso .si{background:#075e54;color:#fff;padding:10px 16px;white-space:nowrap}
+  #aviso .no{background:transparent;color:#6b4e00;width:36px;height:36px;font-size:18px}
+  #chat{flex:1;width:100%;border:0;background:#efeae2}
+  #vacio{display:none;flex:1;align-items:center;justify-content:center;text-align:center;color:#fff;padding:24px;font-size:18px;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="aviso"><span class="tx" id="avisoTx"></span><button type="button" class="si" id="avisoSi"></button><button type="button" class="no" id="avisoNo" aria-label="Cerrar">✕</button></div>
+<iframe id="chat" title="Chat TIVA" allow="microphone; camera; autoplay; clipboard-write"></iframe>
+<div id="vacio">Abrí el link que te mandaron por WhatsApp para entrar a tu chat de TIVA.</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+<script src="config.js"></script>
+<script>
+/* TIVA Chat instalable (10/10/2026). Muestra el mismo chat de siempre y agrega los avisos al celular.
+   El aviso solo dice "Tenés un mensaje nuevo": no lleva el texto ni el link. */
+var EXEC = 'https://script.google.com/macros/s/AKfycbzI9NTjmDUEXo9jy2qxAx1RplCDTkXUCi-gOeJYNz4RJLPstBxUs13wGWpR_bvpdOt-pg/exec';
+function guardado(n,v){ try{ if(v===undefined) return localStorage.getItem(n)||''; localStorage.setItem(n,v); }catch(e){ return ''; } }
+var q = new URLSearchParams(location.search), K = (q.get('k')||'').trim();
+if(K) guardado('tivaK',K); else K = guardado('tivaK');
+
+var esIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+var instalada = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone===true;
+var hayPush = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+var listo = typeof CONFIG==='object' && CONFIG && CONFIG.firebase && CONFIG.firebase.apiKey && CONFIG.vapid;
+
+if(!K){ document.getElementById('chat').style.display='none'; document.getElementById('vacio').style.display='flex'; }
+else document.getElementById('chat').src = EXEC + '?k=' + encodeURIComponent(K) + '&app=1';
+
+var aviso=document.getElementById('aviso'), tx=document.getElementById('avisoTx'), si=document.getElementById('avisoSi');
+function mostrar(texto,boton,accion){ tx.innerHTML=texto; if(boton){ si.textContent=boton; si.style.display=''; si.onclick=accion; } else si.style.display='none'; aviso.style.display='flex'; }
+function ocultar(){ aviso.style.display='none'; }
+document.getElementById('avisoNo').onclick=function(){ ocultar(); guardado('tivaAvisoOculto', String(Date.now())); };
+
+function mandarToken(token){
+  return fetch(EXEC,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({accion:'push',k:K,token:token,equipo:(esIOS?'iPhone':/android/i.test(navigator.userAgent)?'Android':'PC')})});
+}
+var MSG=null;
+function registrar(){
+  if(!listo) return Promise.reject(new Error('Falta configurar'));
+  if(!firebase.apps.length) firebase.initializeApp(CONFIG.firebase);
+  MSG = MSG || firebase.messaging();
+  return navigator.serviceWorker.register('firebase-messaging-sw.js').then(function(reg){
+    return MSG.getToken({vapidKey:CONFIG.vapid, serviceWorkerRegistration:reg});
+  }).then(function(token){
+    if(!token) throw new Error('Sin token');
+    var viejo=guardado('tivaPushTk');
+    if(token!==viejo || Date.now()-Number(guardado('tivaPushT')||0) > 3*86400000){ mandarToken(token); guardado('tivaPushTk',token); guardado('tivaPushT',String(Date.now())); }
+    return token;
+  });
+}
+function activar(){
+  si.disabled=true; si.textContent='Activando…';
+  Notification.requestPermission().then(function(p){
+    if(p!=='granted'){ mostrar('No diste permiso. Para activarlos: Configuración del celular → Notificaciones → TIVA → Permitir.', '', null); return; }
+    return registrar().then(function(){ mostrar('✅ ¡Listo! Ahora te va a sonar el celular cuando te escriban.', '', null); setTimeout(ocultar,4000); });
+  }).catch(function(){ mostrar('No se pudo activar. Probá de nuevo en un rato.', 'Reintentar', activar); })
+    .then(function(){ si.disabled=false; });
+}
+(function inicio(){
+  if(!K || !listo) return;
+  var oculto = Number(guardado('tivaAvisoOculto')||0); if(Date.now()-oculto < 86400000) oculto=true; else oculto=false;
+  if(esIOS && !instalada){
+    if(!oculto) mostrar('📲 Para que te suene el celular: tocá <b>Compartir</b> ⬆️ → <b>Agregar a pantalla de inicio</b> y abrí TIVA desde el ícono.', '', null);
+    return;
+  }
+  if(!hayPush) return;
+  if(Notification.permission==='granted'){ registrar().catch(function(){}); return; }
+  if(Notification.permission==='denied') return;
+  if(!oculto) mostrar('🔔 Activá los avisos para que te suene el celular cuando te escriban.', 'Activar', activar);
+})();
+</script>
+</body>
+</html>
